@@ -1,4 +1,4 @@
-import shutil, re, os
+import shutil, re, os, gc
 from typing import List, Set, Dict, Tuple, Any, Optional, Iterator, Union
 from pathlib import Path
 
@@ -12,7 +12,7 @@ from tfrecord_helper.tfrecord_helper import TFRecordHelper, TFRecordHelperWriter
 from realestate_nlp.common.run_config import home, bOnColab
 from realestate_nlp.common.util import join_df
 
-from realestate_vision.common.utils import get_listingId_from_image_name
+from realestate_vision.common.utils import get_listingId_from_image_name, load_from_pickle, save_to_pickle
 
 from realestate_nlp.ner.data.data_loader import load_avm_prod_snapshot
 try:
@@ -21,6 +21,7 @@ try:
 except:
   print(f'failed to import preproc_listing_qq')
   print(f"Please make sure home/'AVMDataAnalysis'/'monitoring' is in your python search path")
+  raise
 
 BATCH_SIZE = 100   # want this to be a perfect square 
 SQRT_BATCH_SIZE = int(np.sqrt(BATCH_SIZE))
@@ -69,7 +70,7 @@ def source_from_new_image_tagging(bigstack_tfrecord: str, image_destination_dir:
   yhats = model.predict(batch_img_ds)
   iodoor_yhats = yhats[0]
   room_yhats = yhats[1]
-  '''
+
   fireplace_yhats = yhats[2]
   agpool_yhats = yhats[3]
   body_of_water_yhats = yhats[4]
@@ -79,8 +80,8 @@ def source_from_new_image_tagging(bigstack_tfrecord: str, image_destination_dir:
   ss_kitchen_yhats = yhats[8]
   double_sink_yhats = yhats[9]
   upg_kitchen_yhats = yhats[10]
-  # room_top_3 = tf.math.top_k(room_yhats, k=3)
-  '''
+  room_top_3 = tf.math.top_k(room_yhats, k=3)
+
 
   inoutdoor = [INOUT_DOOR_CLASS_NAMES[int(y)] for y in np.squeeze(np.argmax(iodoor_yhats, axis=-1))]
 
@@ -91,6 +92,21 @@ def source_from_new_image_tagging(bigstack_tfrecord: str, image_destination_dir:
     
       'room': [ROOM_CLASS_NAMES[int(y)] for y in np.squeeze(np.argmax(room_yhats, axis=-1))],
       'p_room': np.round(np.max(room_yhats, axis=-1).astype('float'), 4),
+
+      'room_1': np.array(ROOM_CLASS_NAMES)[room_top_3.indices.numpy()[:, 1]],
+      'p_room_1': np.round(room_top_3.values.numpy()[:, 1].astype('float'), 4),
+      'room_2': np.array(ROOM_CLASS_NAMES)[room_top_3.indices.numpy()[:, 2]],
+      'p_room_2': np.round(room_top_3.values.numpy()[:, 2].astype('float'), 4),
+
+      'p_fireplace': np.round(np.squeeze(fireplace_yhats).astype('float'), 4),
+      'p_agpool': np.round(np.squeeze(agpool_yhats).astype('float'), 4),
+      'p_body_of_water': np.round(np.squeeze(body_of_water_yhats).astype('float'), 4),
+      'p_igpool': np.round(np.squeeze(igpool_yhats).astype('float'), 4),
+      'p_balcony': np.round(np.squeeze(balcony_yhats).astype('float'), 4),
+      'p_deck_patio_veranda': np.round(np.squeeze(deck_patio_veranda_yhats).astype('float'), 4),
+      'p_ss_kitchen': np.round(np.squeeze(ss_kitchen_yhats).astype('float'), 4),
+      'p_double_sink': np.round(np.squeeze(double_sink_yhats).astype('float'), 4),
+      'p_upg_kitchen': np.round(np.squeeze(upg_kitchen_yhats).astype('float'), 4)
     })
 
   # exterior type predictions
@@ -182,6 +198,71 @@ def source_from_new_image_tagging(bigstack_tfrecord: str, image_destination_dir:
 
   return predictions_df, filenames, overwritten_listingIds
 
+def apply_avm_processing_to_listing_df(df: pd.DataFrame) -> pd.DataFrame:
+  '''
+  Apply the same processing steps as in AVM analysis
+  '''
+  df.quickQuote = df.quickQuote.apply(fillna_with_empty_dict)
+  df = filter_for_listingType_SALE(df)
+  
+  quickquote_df = flatten_dict_col(df, cols=['quickQuote'], return_only_flattened=True)[0]
+  proc_quality(quickquote_df)
+
+  quickquote_df.exactMatch = quickquote_df.exactMatch.apply(fillna_with_empty_dict)
+  quickquote_df.lmaMatch = quickquote_df.lmaMatch.apply(fillna_with_empty_dict)
+  quickquote_df.liveScoring = quickquote_df.liveScoring.apply(fillna_with_empty_dict)
+
+  quickquote_exactmatch_df = flatten_dict_col(quickquote_df, cols=['exactMatch'], return_only_flattened=True, use_prefix=True)[0]
+  quickquote_lmamatch_df = flatten_dict_col(quickquote_df, cols=['lmaMatch'], return_only_flattened=True, use_prefix=True)[0]
+  quickquote_livescoring_df = flatten_dict_col(quickquote_df, cols=['liveScoring'], return_only_flattened=True, use_prefix=True)[0]
+
+  # clean listing_quickquote_livescoring_df
+  cleanup_livescoring(quickquote_livescoring_df)
+
+  # join with df
+  columns = list(df.columns) + ['quality'] + list(quickquote_exactmatch_df.columns) + list(quickquote_lmamatch_df.columns) + list(quickquote_livescoring_df.columns)
+
+  df = pd.concat([df, 
+                          quickquote_df[['quality']], 
+                          quickquote_exactmatch_df,
+                          quickquote_lmamatch_df,
+                          quickquote_livescoring_df,
+                        ], axis=1, ignore_index=True)
+
+  df.columns = columns
+
+  df.parsedAddress = df.parsedAddress.apply(fillna_with_empty_dict)
+  parsedAddress_df = flatten_dict_col(df, cols=['parsedAddress'], return_only_flattened=True, use_prefix=True)[0]
+
+  columns = list(df.columns) + list(parsedAddress_df.columns)
+  df = pd.concat([df, parsedAddress_df], axis=1, ignore_index=True)
+  df.columns = columns
+
+  del quickquote_df, quickquote_exactmatch_df, quickquote_lmamatch_df, quickquote_livescoring_df, parsedAddress_df
+  gc.collect();
+
+  df.drop(columns=['parsedAddress', 'quickQuote'], inplace=True)
+
+  df[['presented', 'presented_qq_lower', 'presented_qq_upper']] = df.apply(get_presented_best_estimate, axis=1)
+
+  df.drop(index=df.q_py("lastUpdate <= '2021-12-01'").index, inplace=True)
+  fix_ON_provState(df)
+
+  price_threshold = 50000
+  USE_HIGH_PRICE_THRESHOLD = False
+  high_price_threshold = 1e7
+
+  df = price_addr_filter(df, price_threshold, use_high_price_threshold=USE_HIGH_PRICE_THRESHOLD, high_price_threshold=high_price_threshold)
+
+  df.defrag_index(inplace=True)
+
+  # drop complex columns that arent selected in AVM snapshot
+  df.drop(columns=['NBHDEnEntry', 'NBHDFrEntry', 'demoFull', 'demoSummary', 'demographics', 'extraInfo', 'features', 'localLogicInfo', 'location', 'mediaLinks', 'mobileHome', 'office_id', 'rooms'], inplace=True)
+
+  gc.collect()
+
+  return df
+
 
 def download_and_process_new_avm_snapshot(snapshot_date=datetime(2022, 7, 27), download_from_gs=True) -> pd.DataFrame:
   avm_snapshot_listing_df = load_avm_prod_snapshot(snapshot_date=snapshot_date, download_from_gs=download_from_gs)
@@ -242,18 +323,22 @@ def download_and_process_new_avm_snapshot(snapshot_date=datetime(2022, 7, 27), d
 
   return avm_snapshot_listing_df
   
+def get_jumpIds(image_dir: Path) -> List[str]:
+  '''
+  Returns a list of jumpIds from the image directory
+  '''
+  image_dir = Path(image_dir)
+  excl_jumpIds = load_from_pickle(image_dir/'jumpIds.pkl')
+  return excl_jumpIds
 
 def gen_samples_for_downloading(avm_snapshot_listing_df, image_dir: Path, n_sample=1000) -> pd.DataFrame:
   '''
   The output df should be uploaded to jumptools VM to download the images.
   '''
   # excl. jumpId already in image_dir
-  excl_jumpIds = [f.name for f in image_dir.ls()]
+  # excl_jumpIds = [f.name for f in image_dir.ls()]
+  excl_jumpIds = get_jumpIds(image_dir)
   print(f'len(excl_jumpIds): {len(excl_jumpIds)}')
-
-  # avm_snapshot_listing_df.drop(index=avm_snapshot_listing_df.q_py("jumpId.isin(@excl_jumpIds)").index, inplace=True)
-  # avm_snapshot_listing_df.defrag_index(inplace=True)
-  # sample_avm_snapshot_listing_df = avm_snapshot_listing_df.sample(n=n_sample, random_state=42)
 
   sample_avm_snapshot_listing_df = avm_snapshot_listing_df.q_py("~jumpId.isin(@excl_jumpIds)").sample(n=n_sample, random_state=42)[['jumpId', 'photo_uris']].copy()
   sample_avm_snapshot_listing_df.defrag_index(inplace=True)
@@ -347,7 +432,7 @@ def create_tfrecord_from_image_list(imgs: List, out_tfrecord_filepath: str = 'im
   with TFRecordHelperWriter(out_tfrecord_filepath, features = features) as f:
     f.write(data_ds)
 
-def gen_predictions_for(tfrecord_filepath: str, imgs: List) -> pd.DataFrame:
+def gen_predictions_for(tfrecord_filepath: str) -> pd.DataFrame:
   features = {
     'filename': TFRecordHelper.DataType.STRING,
     'image_raw': TFRecordHelper.DataType.STRING,   # bytes for the encoded jpeg, png, etc.
@@ -355,11 +440,12 @@ def gen_predictions_for(tfrecord_filepath: str, imgs: List) -> pd.DataFrame:
 
   parse_fn = TFRecordHelper.parse_fn(features)
 
-  # predictions for in/outdoor and room type
+  imgs = [f.numpy().decode('utf-8') for f in tf.data.TFRecordDataset(tfrecord_filepath).map(parse_fn, num_parallel_calls=tf.data.AUTOTUNE).map(lambda x: x['filename'], num_parallel_calls=tf.data.AUTOTUNE)]
+
+  # predictions for in/outdoor and room type  
   img_ds = tf.data.TFRecordDataset(tfrecord_filepath).map(parse_fn, num_parallel_calls=tf.data.AUTOTUNE).map(lambda x: tf.image.decode_jpeg(x['image_raw'], channels=3), num_parallel_calls=tf.data.AUTOTUNE)
 
   batch_size = 32
-
   batch_img_ds = img_ds.batch(batch_size).prefetch(buffer_size=tf.data.AUTOTUNE)
 
   model = load_model(home/'ListingImageClassification'/'training'/'hydra_all'/'resnet50_hydra_all.acc.0.9322.h5', compile=False)
@@ -368,7 +454,7 @@ def gen_predictions_for(tfrecord_filepath: str, imgs: List) -> pd.DataFrame:
 
   iodoor_yhats = yhats[0]
   room_yhats = yhats[1]
-  '''
+
   fireplace_yhats = yhats[2]
   agpool_yhats = yhats[3]
   body_of_water_yhats = yhats[4]
@@ -378,17 +464,35 @@ def gen_predictions_for(tfrecord_filepath: str, imgs: List) -> pd.DataFrame:
   ss_kitchen_yhats = yhats[8]
   double_sink_yhats = yhats[9]
   upg_kitchen_yhats = yhats[10]
-  '''
+
+  room_top_3 = tf.math.top_k(room_yhats, k=3)
   
   inoutdoor = [INOUT_DOOR_CLASS_NAMES[int(y)] for y in np.squeeze(np.argmax(iodoor_yhats, axis=-1))]
 
   predictions_df = pd.DataFrame(data={
-    'img': [Path(img).name for img in imgs],
+    # 'img': [Path(img).name for img in imgs],
+    'img': imgs,
     'inoutdoor': inoutdoor,
     'p_iodoor': np.round(np.max(iodoor_yhats, axis=-1).astype('float'), 4),
 
     'room': [ROOM_CLASS_NAMES[int(y)] for y in np.squeeze(np.argmax(room_yhats, axis=-1))],
     'p_room': np.round(np.max(room_yhats, axis=-1).astype('float'), 4),
+
+    'room_1': np.array(ROOM_CLASS_NAMES)[room_top_3.indices.numpy()[:, 1]],
+    'p_room_1': np.round(room_top_3.values.numpy()[:, 1].astype('float'), 4),
+    'room_2': np.array(ROOM_CLASS_NAMES)[room_top_3.indices.numpy()[:, 2]],
+    'p_room_2': np.round(room_top_3.values.numpy()[:, 2].astype('float'), 4),
+
+    'p_fireplace': np.round(np.squeeze(fireplace_yhats).astype('float'), 4),
+    'p_agpool': np.round(np.squeeze(agpool_yhats).astype('float'), 4),
+    'p_body_of_water': np.round(np.squeeze(body_of_water_yhats).astype('float'), 4),
+    'p_igpool': np.round(np.squeeze(igpool_yhats).astype('float'), 4),
+    'p_balcony': np.round(np.squeeze(balcony_yhats).astype('float'), 4),
+    'p_deck_patio_veranda': np.round(np.squeeze(deck_patio_veranda_yhats).astype('float'), 4),
+    'p_ss_kitchen': np.round(np.squeeze(ss_kitchen_yhats).astype('float'), 4),
+    'p_double_sink': np.round(np.squeeze(double_sink_yhats).astype('float'), 4),
+    'p_upg_kitchen': np.round(np.squeeze(upg_kitchen_yhats).astype('float'), 4)
+
   })
 
   # predictions for exterior types, use ensemble of models
@@ -432,14 +536,15 @@ def gen_predictions_for(tfrecord_filepath: str, imgs: List) -> pd.DataFrame:
   y_pred = np.mean(y_preds, axis=0)
   
   exterior_predictions_df = pd.DataFrame(data={
-        'img': [Path(img).name for img in imgs],
+        # 'img': [Path(img).name for img in imgs],
+        'img': imgs,
         'p_facade': np.round(y_pred[:, 1].astype('float'), 4),    # first element was an indicator for hard vs. soft labels during training, should ignore during inference.
         'p_backyard': np.round(y_pred[:, 2].astype('float'), 4),
         'p_view': np.round(y_pred[:, 3].astype('float'), 4),
         'p_exterior': np.round(y_pred[:, 4].astype('float'), 4)
       })
 
-
+  # combine both set of predictions
   predictions_df = join_df(predictions_df, exterior_predictions_df, left_on='img', how='inner')
 
   # remove irrelevant exterior predictions from non outdoor 
@@ -452,7 +557,6 @@ def gen_predictions_for(tfrecord_filepath: str, imgs: List) -> pd.DataFrame:
   predictions_df['listingId'] = predictions_df.img.apply(get_listingId_from_image_name)
 
   return predictions_df
-
 
 
 
@@ -470,3 +574,22 @@ def unstack(filenames, bigImg, orig_aspect_ratios):    # unstack grid of NxN ima
     out_orig_aspect_ratios = tf.sparse.to_dense(orig_aspect_ratios)
 
   return out_filenames, img, out_orig_aspect_ratios
+
+
+def update_jumpIds_cache(image_dir: str, cache_dir: str) -> None:
+  '''
+  Update jumpIds cache with new images in src_image_dir
+  '''
+  image_dir = Path(image_dir)
+
+  jumpIds = []
+  for p in image_dir.rlf('*.jpg'):
+    listingId = get_listingId_from_image_name(p.name)
+    jumpIds.append(listingId)
+
+  jumpIds = list(set(jumpIds))
+
+  orig_jumpIds = load_from_pickle(cache_dir/'jumpIds.pkl')
+  jumpIds += orig_jumpIds
+
+  save_to_pickle(jumpIds, cache_dir/'jumpIds.pkl')
