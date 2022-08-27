@@ -94,3 +94,42 @@ def sample_carriage_trade(df: pd.DataFrame) -> Tuple[pd.DataFrame, List]:
   carriage_trade_jumpIds = list(carriage_trade_df.jumpId.values)
   
   return carriage_trade_df, carriage_trade_jumpIds
+
+def sample_kitchen_features(df: pd.DataFrame, p_threshold: float = 0.9) -> Tuple[pd.DataFrame]:
+  '''
+  Sample listings with kitchen features with probability greater than p_threshold
+
+  Input: a dataframe with predictions from all_hydra
+
+  Return: dataframe of sampled listings, list of sampled listingIds
+  '''
+
+  assert 'room' in df.columns, 'room column not found'
+  assert 'p_ss_kitchen' in df.columns, 'p_ss_kitchen column not found'
+  assert 'p_double_sink' in df.columns, 'p_double_sink column not found'
+  assert 'p_upg_kitchen' in df.columns, 'p_upg_kitchen column not found'
+
+  good_quality_kitchen_df = df.q_py("room == 'kitchen' and (p_ss_kitchen > 0.9 and p_double_sink > 0.9 and p_upg_kitchen > 0.9)").copy()
+  good_quality_kitchen_df.defrag_index(inplace=True)
+
+  return good_quality_kitchen_df
+
+def sample_listings_with_price_more_than_qq(df: pd.DataFrame) -> Tuple[pd.DataFrame, List]:
+  '''
+  Sample listings with price more than upper bound of quick quote range.
+
+  Input: a dataframe with price and presented_qq_upper (upper bound of quick quote range)
+
+  Return: dataframe of sampled listings, list of sampled listingIds
+  '''
+
+  assert 'price' in df.columns, 'price column not found'
+  assert 'presented_qq_upper' in df.columns, 'presented_qq_upper column not found'
+
+  higher_than_qq_df = df.q_py(f"price > presented_qq_upper").copy()
+
+  higher_than_qq_jumpIds = list(higher_than_qq_df.jumpId.values)
+  
+  return higher_than_qq_df, higher_than_qq_jumpIds
+
+# def 

@@ -8,8 +8,10 @@ try:
 except:
   print('doccano_api_client not installed. Doccano related functions will not work.')
 
+from realestate_core.common.utils import load_from_pickle, save_to_pickle
+
 from realestate_nlp.common.run_config import home, bOnColab
-from realestate_vision.common.utils import load_from_pickle, save_to_pickle, get_listingId_from_image_name, get_listing_folder_from_image_name
+from realestate_vision.common.utils import get_listingId_from_image_name, get_listing_folder_from_image_name
 
 from .data_processing import apply_avm_processing_to_listing_df
 

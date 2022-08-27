@@ -10,9 +10,9 @@ from datetime import datetime
 
 from tfrecord_helper.tfrecord_helper import TFRecordHelper, TFRecordHelperWriter 
 from realestate_nlp.common.run_config import home, bOnColab
-from realestate_nlp.common.util import join_df
+from realestate_core.common.utils import join_df, load_from_pickle, save_to_pickle
 
-from realestate_vision.common.utils import get_listingId_from_image_name, load_from_pickle, save_to_pickle
+from realestate_vision.common.utils import get_listingId_from_image_name
 
 from realestate_nlp.ner.data.data_loader import load_avm_prod_snapshot
 try:
