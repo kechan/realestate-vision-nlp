@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from realestate_nlp.common.run_config import home, bOnColab
+from realestate_core.common.run_config import home, bOnColab
 
 neg_terms_in_remark = ['mini home', 'as-is', 
                        #'where is',    # do not use this for now, need to double check context

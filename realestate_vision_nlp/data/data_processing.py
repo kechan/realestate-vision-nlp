@@ -9,7 +9,7 @@ from tensorflow.keras.models import load_model
 from datetime import datetime
 
 from tfrecord_helper.tfrecord_helper import TFRecordHelper, TFRecordHelperWriter 
-from realestate_nlp.common.run_config import home, bOnColab
+from realestate_core.common.run_config import home, bOnColab
 from realestate_core.common.utils import join_df, load_from_pickle, save_to_pickle
 
 from realestate_vision.common.utils import get_listingId_from_image_name

@@ -10,7 +10,7 @@ except:
 
 from realestate_core.common.utils import load_from_pickle, save_to_pickle
 
-from realestate_nlp.common.run_config import home, bOnColab
+from realestate_core.common.run_config import home, bOnColab
 from realestate_vision.common.utils import get_listingId_from_image_name, get_listing_folder_from_image_name
 
 from .data_processing import apply_avm_processing_to_listing_df
@@ -114,7 +114,7 @@ def upload_images_to_doccano_project(
 
     sleep(0.1)
 
-def get_all_listing_df(keep_cols=['jumpId', 'remarks'], dedup=False):
+def get_all_listing_df(keep_cols=['jumpId', 'remarks'], dedup=False) -> pd.DataFrame:
   # on My Mac Backup
   data_dir = Path('/Volumes/My Mac Backup/RLP/ListingImageClassification/data/bigstack_rlp_listing_images_tfrecords')
   assert data_dir.exists(), f'{data_dir} does not exist'
