@@ -21,18 +21,25 @@ class FlaxCLIP:
 
     self.model = None # lazy evaluation
     self.processor = None # lazy evaluation
+    self.tokenizer = None # lazy evaluation
 
   def set_text_prompts_list(self, text_prompts_list: List[str]):
+    '''
+    text_prompts_list: list of pairs of text prompts to be used for CLIP model
+    
+    Set self.text_prompts_list and compute self.text_features
+    '''
     self.text_prompts_list = text_prompts_list
 
     # compute text embeddings
-    tokenizer = CLIPTokenizer.from_pretrained(self.model_name)
+    if self.tokenizer is None:
+      self.tokenizer = CLIPTokenizer.from_pretrained(self.model_name)
     if self.model is None:
       self.model = FlaxCLIPModel.from_pretrained(self.model_name)
 
     text_features_list = []
     for text_prompts in self.text_prompts_list:
-        text_embeddings = self.model.get_text_features(tokenizer(text_prompts, padding=True, return_tensors="np").input_ids)
+        text_embeddings = self.model.get_text_features(self.tokenizer(text_prompts, padding=True, return_tensors="np").input_ids)
         text_features = text_embeddings / jnp.linalg.norm(text_embeddings, axis=-1, keepdims=True)
         text_features_list.append(text_features)
         
@@ -41,7 +48,7 @@ class FlaxCLIP:
 
     del text_features_list
     del text_embeddings
-    del tokenizer
+    del self.tokenizer
     gc.collect()
 
     assert self.text_features.shape == (len(self.text_prompts_list), 2, 512), 'wrong shape'
@@ -52,7 +59,7 @@ class FlaxCLIP:
   def set_general_quality_col_ids(self, general_quality_col_ids: List[int]):
     self.general_quality_col_ids = general_quality_col_ids
 
-  def preprocess_and_cache_image(self, photos: List[str], cache_file_prefix: str):
+  def preprocess_and_cache_image_npy(self, photos: List[str], cache_file_prefix: str):
     '''
     This is done as a temporary measure to improve GPU utilization by 
     preprocessing the images and caching npy to disk by a 4-CPU instance, and
@@ -119,9 +126,10 @@ class FlaxCLIP:
     df['features_score'] = np.mean(df[[self._prompt_to_colname(t[-1]) for i, t in enumerate(self.text_prompts_list) if i in self.specific_feature_col_ids]].values, axis=-1)
 
     # filter out images that mostly likely not kitchen
-    df.drop(index=df.q_py("prob_kitchen < 0.5").index, inplace=True)
-    df.defrag_index(inplace=True)
-    df.drop(columns=['prob_kitchen'], inplace=True)
+    if 'prob_kitchen' in df.columns:
+      df.drop(index=df.q_py("prob_kitchen < 0.5").index, inplace=True)
+      df.defrag_index(inplace=True)
+      df.drop(columns=['prob_kitchen'], inplace=True)
 
     return df
 
@@ -130,6 +138,41 @@ class FlaxCLIP:
     self.text_features = None
     gc.collect()
 
+  def cleanup(self):
+    pass
+
   def _prompt_to_colname(self, prompt):
     x = 'prob_' + prompt.split('❚❚❚')[-1].replace('a photo of a kitchen with ', '').replace('a photo of a ', '').replace(' ', '_').replace('.', '')
     return x
+
+if __name__ == '__main__':
+  # test
+  model_name = 'openai/clip-vit-base-patch32'
+  model = FlaxCLIP(model_name)
+
+  text_prompts_list = [
+    ["a photo of a kitchen", "a photo of a kitchen with beautiful granite counter top."],
+    ["a photo of a kitchen", "a photo of a kitchen with a large beautiful kitchen island."],  
+    ["a photo of a kitchen", "a photo of a kitchen with beautiful full height cabinets."],
+    ["a photo of a kitchen", "a photo of a kitchen with beautiful recessed lighting."],   
+    ["a photo of a kitchen", "a photo of a beautiful gourmet kitchen."],   
+    ["a photo of a kitchen", "a photo of a kitchen with large light fixture with unique finishes."],
+    ["a photo of a kitchen", "a photo of a kitchen with abundance of cupboard storage."],
+    ["a photo of a kitchen", "a photo of a kitchen with beautiful impressive custom kitchen cabinetry."],
+    ["a photo of a kitchen", "a photo of a kitchen with beautiful wine fridge."],
+    ["a photo of a room", "a photo of a kitchen."]
+  #     ["a photo of a bathroom", "a photo of a kitchen."]
+  ]
+
+  specific_feature_col_ids = [0, 1, 2, 3, 5, 6, 7, 8]
+  general_quality_col_ids = [4, 9]
+
+  model.set_text_prompts_list(text_prompts_list)
+  model.set_specific_feature_col_ids(specific_feature_col_ids)
+  model.set_general_quality_col_ids(general_quality_col_ids)
+
+  model.preprocess_and_cache_image_npy(['./test.jpg'], 'test')
+  df = model.predict_from_npy('test')
+
+  print(df)
+  model.cleanup()    
