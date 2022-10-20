@@ -193,8 +193,9 @@ class FlaxCLIP:
     # for f in Path('.').lf('clip_*_df'): os.remove(f)
     for f in Path('.').lf('*.npz'): os.remove(f)
     for f in photos: os.remove(f)
-        
-    os.remove(f'{cache_file_prefix}_img_names_list.pkl')
+    
+    if Path(f'{cache_file_prefix}_img_names_list.pkl').exists():
+      os.remove(f'{cache_file_prefix}_img_names_list.pkl')
 
   def save_text_prompts_to_prob_cols(self):
     #  save_to_pickle({t[-1]: self._prompt_to_colname(t[-1]) for t in text_prompts_list}, tmp/'kitchen_text_prompts_to_prob_cols.pkl')
