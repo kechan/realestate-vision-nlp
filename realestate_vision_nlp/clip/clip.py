@@ -164,7 +164,7 @@ class FlaxCLIP:
 
     assert probs.shape[1:] == (len(self.text_prompts_list), 2)
 
-    img_names_list = load_from_pickle(f'{cache_file_prefix}_img_names_list.pkl')
+    # img_names_list = load_from_pickle(f'{cache_file_prefix}_img_names_list.pkl')
 
     df = pd.DataFrame(data={'img_name': img_names_list})
     for k, col in enumerate([self._prompt_to_colname(t[-1]) for t in self.text_prompts_list]):
