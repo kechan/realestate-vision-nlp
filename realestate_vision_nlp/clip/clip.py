@@ -141,7 +141,7 @@ class FlaxCLIP:
 
     photo_batches = [photos[i:i+batch_size] for i in range(0, len(photos), batch_size)]
 
-    img_names_list = []
+    img_names_list, probs_list = [], []
     for photo_batch in tqdm(photo_batches):
       imgs = [PIL.Image.open(img_name) for img_name in photo_batch]
       img_names_list += [Path(img_name).name for img_name in photo_batch]
