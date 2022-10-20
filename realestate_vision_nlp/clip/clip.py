@@ -136,6 +136,8 @@ class FlaxCLIP:
     photos: list of image paths
     '''
     assert self.text_features is not None, 'text_features not set'
+    if self.processor is None:
+      self.processor = CLIPProcessor.from_pretrained(self.model_name)
 
     photo_batches = [photos[i:i+batch_size] for i in range(0, len(photos), batch_size)]
 
@@ -146,7 +148,7 @@ class FlaxCLIP:
 
       pixel_values = self.processor(images=imgs, return_tensors="np").pixel_values    
       
-      image_embeddings = model.get_image_features(pixel_values)
+      image_embeddings = self.model.get_image_features(pixel_values)
 
       image_features = image_embeddings / jnp.linalg.norm(image_embeddings, axis=-1, keepdims=True)  # normalize
 
