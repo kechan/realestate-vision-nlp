@@ -87,7 +87,7 @@ class FlaxCLIP:
     assert self.text_features is not None, 'text_features not set'
 
     npz_files = [str(f) for f in Path('.').lf(f'{cache_file_prefix}*.npz')]                
-    npz_files = sorted(npz_files, key=lambda x: re.search(r'.*?_(\d+).npz', x).group(1))  
+    npz_files = sorted(npz_files, key=lambda x: int(re.search(r'.*?_(\d+).npz', x).group(1)))
 
     probs_list = []
     for f in npz_files:
@@ -130,6 +130,56 @@ class FlaxCLIP:
       df.drop(columns=['prob_kitchen'], inplace=True)
 
     return df
+
+  def predict(self, photos: List[Union[str, Path]], cache_file_prefix: str, batch_size=64) -> pd.DataFrame:
+    '''
+    photos: list of image paths
+    '''
+    assert self.text_features is not None, 'text_features not set'
+
+    photo_batches = [photos[i:i+batch_size] for i in range(0, len(photos), batch_size)]
+
+    img_names_list = []
+    for photo_batch in tqdm(photo_batches):
+      imgs = [PIL.Image.open(img_name) for img_name in photo_batch]
+      img_names_list += [Path(img_name).name for img_name in photo_batch]
+
+      pixel_values = self.processor(images=imgs, return_tensors="np").pixel_values    
+      
+      image_embeddings = model.get_image_features(pixel_values)
+
+      image_features = image_embeddings / jnp.linalg.norm(image_embeddings, axis=-1, keepdims=True)  # normalize
+
+      probs = jax.nn.softmax(100 * jnp.einsum('mc, ftc -> fmt', image_features, self.text_features), axis=-1)
+      probs = rearrange(probs, 'f b c -> b f c')
+      
+      probs_list.append(np.array(probs))
+
+    probs = np.concatenate(probs_list, axis=0)
+
+    del probs_list 
+    gc.collect()
+
+    assert probs.shape[1:] == (len(self.text_prompts_list), 2)
+
+    img_names_list = load_from_pickle(f'{cache_file_prefix}_img_names_list.pkl')
+
+    df = pd.DataFrame(data={'img_name': img_names_list})
+    for k, col in enumerate([self._prompt_to_colname(t[-1]) for t in self.text_prompts_list]):
+        df[col] = probs[:, k, 1]
+    df['data_src'] = cache_file_prefix
+
+    # features score is the mean prob of specific features (excl. general qualify or room type classification)
+    df['features_score'] = np.mean(df[[self._prompt_to_colname(t[-1]) for i, t in enumerate(self.text_prompts_list) if i in self.specific_feature_col_ids]].values, axis=-1)
+
+    # filter out images that mostly likely not kitchen
+    if 'prob_kitchen' in df.columns:
+      df.drop(index=df.q_py("prob_kitchen < 0.5").index, inplace=True)
+      df.defrag_index(inplace=True)
+      df.drop(columns=['prob_kitchen'], inplace=True)
+
+    return df
+    
 
   def reset_text_prompts(self):
     self.text_prompts_list = None
