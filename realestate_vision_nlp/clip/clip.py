@@ -1,6 +1,6 @@
 from typing import List, Set, Dict, Tuple, Any, Optional, Iterator, Union
 
-import PIL, re, gc
+import PIL, re, os, gc
 from tqdm import tqdm
 from einops import rearrange
 from pathlib import Path
@@ -59,7 +59,7 @@ class FlaxCLIP:
   def set_general_quality_col_ids(self, general_quality_col_ids: List[int]):
     self.general_quality_col_ids = general_quality_col_ids
 
-  def preprocess_and_cache_image_npy(self, photos: List[str], cache_file_prefix: str):
+  def preprocess_and_cache_image_npy(self, photos: List[Union[str, Path]], cache_file_prefix: str, batch_size=4096):
     '''
     This is done as a temporary measure to improve GPU utilization by 
     preprocessing the images and caching npy to disk by a 4-CPU instance, and
@@ -70,7 +70,6 @@ class FlaxCLIP:
     if self.processor is None:
       self.processor = CLIPProcessor.from_pretrained(self.model_name)
 
-    batch_size = 4096
     photo_batches = [photos[i:i+batch_size] for i in range(0, len(photos), batch_size)]
 
     img_names_list = []
@@ -84,20 +83,19 @@ class FlaxCLIP:
 
     save_to_pickle(img_names_list, f'{cache_file_prefix}_img_names_list.pkl')
 
-  def predict_from_npy(self, cache_file_prefix: str) -> pd.DataFrame:
+  def predict_from_npy(self, cache_file_prefix: str, batch_size=64) -> pd.DataFrame:
     assert self.text_features is not None, 'text_features not set'
 
     npz_files = [str(f) for f in Path('.').lf(f'{cache_file_prefix}*.npz')]                
     npz_files = sorted(npz_files, key=lambda x: re.search(r'.*?_(\d+).npz', x).group(1))  
 
     probs_list = []
-    batch_size = 64
     for f in npz_files:
       print(f)
       pixel_values = np.load(f)['pixel_values']
 
       for i in tqdm(range(0, len(pixel_values), batch_size)):
-        print(i, i+batch_size)
+        # print(i, i+batch_size)
         pixel_values_batch = pixel_values[i:i+batch_size]
 
         image_embeddings = self.model.get_image_features(pixel_values_batch)
@@ -138,8 +136,18 @@ class FlaxCLIP:
     self.text_features = None
     gc.collect()
 
-  def cleanup(self):
+  def cleanup(self, photos: List[Union[str, Path]], cache_file_prefix: str):
+    # clean all
+    # for f in Path('.').lf('clip_*_df'): os.remove(f)
+    for f in Path('.').lf('*.npz'): os.remove(f)
+    for f in photos: os.remove(f)
+        
+    os.remove(f'{cache_file_prefix}_img_names_list.pkl')
+
+  def save_text_prompts_to_prob_cols(self):
+    #  save_to_pickle({t[-1]: self._prompt_to_colname(t[-1]) for t in text_prompts_list}, tmp/'kitchen_text_prompts_to_prob_cols.pkl')
     pass
+
 
   def _prompt_to_colname(self, prompt):
     x = 'prob_' + prompt.split('❚❚❚')[-1].replace('a photo of a kitchen with ', '').replace('a photo of a ', '').replace(' ', '_').replace('.', '')
