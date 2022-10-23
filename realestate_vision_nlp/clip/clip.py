@@ -131,9 +131,43 @@ class FlaxCLIP:
 
     return df
 
-  def predict(self, photos: List[Union[str, Path]], cache_file_prefix: str, batch_size=64) -> pd.DataFrame:
+  def get_image_features(self, photos: List[Union[str, Path]], data_src_name: str, batch_size=64) -> Tuple[List, np.ndarray]:
     '''
     photos: list of image paths
+    data_src_name: data source name that will be appended to output filename
+
+    return:
+      img_names_list: list of image names
+      image_features: np.ndarray of shape (len(photos), 512)
+    '''
+
+    if self.processor is None:
+      self.processor = CLIPProcessor.from_pretrained(self.model_name)
+
+    photo_batches = [photos[i:i+batch_size] for i in range(0, len(photos), batch_size)]
+
+    img_names_list = []
+    image_features_list = []
+    for photo_batch in tqdm(photo_batches):
+      imgs = [PIL.Image.open(img_name) for img_name in photo_batch]
+      img_names_list += [Path(img_name).name for img_name in photo_batch]
+
+      pixel_values = self.processor(images=imgs, return_tensors="np").pixel_values
+
+      image_embeddings = self.model.get_image_features(pixel_values)
+      image_features = image_embeddings / jnp.linalg.norm(image_embeddings, axis=-1, keepdims=True)
+
+      image_features_list.append(np.array(image_features))
+
+    image_features = np.concatenate(image_features_list, axis=0)
+    np.savez_compressed(f'clip_image_features_{data_src_name}', files=img_names_list, image_features=image_features)
+    
+    return img_names_list, image_features
+
+  def predict(self, photos: List[Union[str, Path]], data_src_name: str, batch_size=64) -> pd.DataFrame:
+    '''
+    photos: list of image paths
+    data_src_name: name of the data source, which is written to the output df in a column named 'data_src'
     '''
     assert self.text_features is not None, 'text_features not set'
     if self.processor is None:
@@ -169,7 +203,7 @@ class FlaxCLIP:
     df = pd.DataFrame(data={'img_name': img_names_list})
     for k, col in enumerate([self._prompt_to_colname(t[-1]) for t in self.text_prompts_list]):
         df[col] = probs[:, k, 1]
-    df['data_src'] = cache_file_prefix
+    df['data_src'] = data_src_name
 
     # features score is the mean prob of specific features (excl. general qualify or room type classification)
     df['features_score'] = np.mean(df[[self._prompt_to_colname(t[-1]) for i, t in enumerate(self.text_prompts_list) if i in self.specific_feature_col_ids]].values, axis=-1)
@@ -188,6 +222,7 @@ class FlaxCLIP:
     self.text_features = None
     gc.collect()
 
+
   def cleanup(self, photos: List[Union[str, Path]], cache_file_prefix: str):
     # clean all
     # for f in Path('.').lf('clip_*_df'): os.remove(f)
@@ -197,9 +232,9 @@ class FlaxCLIP:
     if Path(f'{cache_file_prefix}_img_names_list.pkl').exists():
       os.remove(f'{cache_file_prefix}_img_names_list.pkl')
 
-  def save_text_prompts_to_prob_cols(self):
-    #  save_to_pickle({t[-1]: self._prompt_to_colname(t[-1]) for t in text_prompts_list}, tmp/'kitchen_text_prompts_to_prob_cols.pkl')
-    pass
+  def save_text_prompts_to_prob_cols(self, dest_dir: Path):
+    save_to_pickle({t[-1]: self._prompt_to_colname(t[-1]) for t in text_prompts_list}, dest_dir/'kitchen_text_prompts_to_prob_cols.pkl')
+
 
 
   def _prompt_to_colname(self, prompt):
