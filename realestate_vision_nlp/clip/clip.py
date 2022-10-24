@@ -131,10 +131,9 @@ class FlaxCLIP:
 
     return df
 
-  def get_image_features(self, photos: List[Union[str, Path]], data_src_name: str, batch_size=64) -> Tuple[List, np.ndarray]:
+  def get_image_features(self, photos: List[Union[str, Path]], batch_size=64) -> Tuple[List, np.ndarray]:
     '''
     photos: list of image paths
-    data_src_name: data source name that will be appended to output filename
 
     return:
       img_names_list: list of image names
@@ -160,7 +159,7 @@ class FlaxCLIP:
       image_features_list.append(np.array(image_features))
 
     image_features = np.concatenate(image_features_list, axis=0)
-    np.savez_compressed(f'clip_image_features_{data_src_name}', files=img_names_list, image_features=image_features)
+    # np.savez_compressed(f'clip_image_features_{data_src_name}', files=img_names_list, image_features=image_features)
     
     return img_names_list, image_features
 
@@ -233,8 +232,8 @@ class FlaxCLIP:
       os.remove(f'{cache_file_prefix}_img_names_list.pkl')
 
   def save_text_prompts_to_prob_cols(self, dest_dir: Path):
-    save_to_pickle({t[-1]: self._prompt_to_colname(t[-1]) for t in text_prompts_list}, dest_dir/'kitchen_text_prompts_to_prob_cols.pkl')
-
+    save_to_pickle({t[-1]: self._prompt_to_colname(t[-1]) for t in self.text_prompts_list}, dest_dir/'kitchen_text_prompts_to_prob_cols.pkl')
+    save_to_pickle(self.text_prompts_list, dest_dir/'kitchen_text_prompts_list.pkl')
 
 
   def _prompt_to_colname(self, prompt):
