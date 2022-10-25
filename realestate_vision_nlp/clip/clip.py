@@ -1,4 +1,5 @@
 from typing import List, Set, Dict, Tuple, Any, Optional, Iterator, Union
+from xml.dom import NoDataAllowedErr
 
 import PIL, re, os, gc
 from tqdm import tqdm
@@ -163,41 +164,48 @@ class FlaxCLIP:
     
     return img_names_list, image_features
 
-  def predict(self, photos: List[Union[str, Path]], data_src_name: str, batch_size=64) -> pd.DataFrame:
+  def predict(self, *, photos: List[Union[str, Path]] = None, image_features: np.ndarray = None, image_names: Union[List, np.ndarray] = None, data_src_name: str = None, batch_size=64) -> pd.DataFrame:
     '''
     photos: list of image paths
     data_src_name: name of the data source, which is written to the output df in a column named 'data_src'
     '''
     assert self.text_features is not None, 'text_features not set'
-    if self.processor is None:
-      self.processor = CLIPProcessor.from_pretrained(self.model_name)
+    if photos is not None:
 
-    photo_batches = [photos[i:i+batch_size] for i in range(0, len(photos), batch_size)]
+      if self.processor is None:
+        self.processor = CLIPProcessor.from_pretrained(self.model_name)
 
-    img_names_list, probs_list = [], []
-    for photo_batch in tqdm(photo_batches):
-      imgs = [PIL.Image.open(img_name) for img_name in photo_batch]
-      img_names_list += [Path(img_name).name for img_name in photo_batch]
+      photo_batches = [photos[i:i+batch_size] for i in range(0, len(photos), batch_size)]
 
-      pixel_values = self.processor(images=imgs, return_tensors="np").pixel_values    
-      
-      image_embeddings = self.model.get_image_features(pixel_values)
+      img_names_list, probs_list = [], []
+      for photo_batch in tqdm(photo_batches):
+        imgs = [PIL.Image.open(img_name) for img_name in photo_batch]
+        img_names_list += [Path(img_name).name for img_name in photo_batch]
 
-      image_features = image_embeddings / jnp.linalg.norm(image_embeddings, axis=-1, keepdims=True)  # normalize
+        pixel_values = self.processor(images=imgs, return_tensors="np").pixel_values    
+        
+        image_embeddings = self.model.get_image_features(pixel_values)
 
+        image_features = image_embeddings / jnp.linalg.norm(image_embeddings, axis=-1, keepdims=True)  # normalize
+
+        probs = jax.nn.softmax(100 * jnp.einsum('mc, ftc -> fmt', image_features, self.text_features), axis=-1)
+        probs = rearrange(probs, 'f b c -> b f c')
+        
+        probs_list.append(np.array(probs))
+
+      probs = np.concatenate(probs_list, axis=0)
+
+      del probs_list 
+      gc.collect()
+
+      assert probs.shape[1:] == (len(self.text_prompts_list), 2)
+    elif image_features is not None and image_names is not None:
+      img_names_list = image_names
       probs = jax.nn.softmax(100 * jnp.einsum('mc, ftc -> fmt', image_features, self.text_features), axis=-1)
       probs = rearrange(probs, 'f b c -> b f c')
-      
-      probs_list.append(np.array(probs))
-
-    probs = np.concatenate(probs_list, axis=0)
-
-    del probs_list 
-    gc.collect()
-
-    assert probs.shape[1:] == (len(self.text_prompts_list), 2)
-
-    # img_names_list = load_from_pickle(f'{cache_file_prefix}_img_names_list.pkl')
+      probs = np.array(probs)
+    else:
+      raise ValueError('Either photos or image_features and image_names must be provided')
 
     df = pd.DataFrame(data={'img_name': img_names_list})
     for k, col in enumerate([self._prompt_to_colname(t[-1]) for t in self.text_prompts_list]):
@@ -208,12 +216,14 @@ class FlaxCLIP:
     df['features_score'] = np.mean(df[[self._prompt_to_colname(t[-1]) for i, t in enumerate(self.text_prompts_list) if i in self.specific_feature_col_ids]].values, axis=-1)
 
     # filter out images that mostly likely not kitchen
-    if 'prob_kitchen' in df.columns:
-      df.drop(index=df.q_py("prob_kitchen < 0.5").index, inplace=True)
-      df.defrag_index(inplace=True)
-      df.drop(columns=['prob_kitchen'], inplace=True)
+    # if 'prob_kitchen' in df.columns:
+    #   df.drop(index=df.q_py("prob_kitchen < 0.5").index, inplace=True)
+    #   df.defrag_index(inplace=True)
+    #   df.drop(columns=['prob_kitchen'], inplace=True)
 
     return df
+    
+
     
 
   def reset_text_prompts(self):
@@ -225,11 +235,11 @@ class FlaxCLIP:
   def cleanup(self, photos: List[Union[str, Path]], cache_file_prefix: str):
     # clean all
     # for f in Path('.').lf('clip_*_df'): os.remove(f)
-    for f in Path('.').lf('*.npz'): os.remove(f)
+    # for f in Path('.').lf('*.npz'): os.remove(f)
     for f in photos: os.remove(f)
     
-    if Path(f'{cache_file_prefix}_img_names_list.pkl').exists():
-      os.remove(f'{cache_file_prefix}_img_names_list.pkl')
+    # if Path(f'{cache_file_prefix}_img_names_list.pkl').exists():
+    #   os.remove(f'{cache_file_prefix}_img_names_list.pkl')
 
   def save_text_prompts_to_prob_cols(self, dest_dir: Path):
     save_to_pickle({t[-1]: self._prompt_to_colname(t[-1]) for t in self.text_prompts_list}, dest_dir/'kitchen_text_prompts_to_prob_cols.pkl')
@@ -237,7 +247,8 @@ class FlaxCLIP:
 
 
   def _prompt_to_colname(self, prompt):
-    x = 'prob_' + prompt.split('❚❚❚')[-1].replace('a photo of a kitchen with ', '').replace('a photo of a ', '').replace(' ', '_').replace('.', '')
+    # x = 'prob_' + prompt.split('❚❚❚')[-1].replace('a photo of a kitchen with ', '').replace('a photo of a ', '').replace(' ', '_').replace('.', '')
+    x = 'prob_' + prompt.replace('a photo of a kitchen with ', '').replace('a photo of a ', '').replace(' ', '_').replace('.', '')
     return x
 
 if __name__ == '__main__':
