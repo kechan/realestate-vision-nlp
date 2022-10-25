@@ -33,7 +33,11 @@ class FlaxCLIP:
     self.text_prompts_list = text_prompts_list
 
     # compute text embeddings
-    if self.tokenizer is None: self.tokenizer = CLIPTokenizer.from_pretrained(self.model_name)
+    try:
+      if self.tokenizer is None: self.tokenizer = CLIPTokenizer.from_pretrained(self.model_name)
+    except:
+      self.tokenizer = CLIPTokenizer.from_pretrained(self.model_name)
+      
     if self.model is None: self.model = FlaxCLIPModel.from_pretrained(self.model_name)
 
     text_features_list = []
@@ -161,7 +165,7 @@ class FlaxCLIP:
     
     return img_names_list, image_features
 
-  def predict(self, *, photos: List[Union[str, Path]] = None, image_features: np.ndarray = None, image_names: Union[List, np.ndarray] = None, data_src_name: str = None, batch_size=64) -> pd.DataFrame:
+  def predict(self, photos: List[Union[str, Path]] = None, image_features: np.ndarray = None, image_names: Union[List, np.ndarray] = None, data_src_name: str = None, batch_size=64) -> pd.DataFrame:
     '''
     photos: list of image paths
     data_src_name: name of the data source, which is written to the output df in a column named 'data_src'
