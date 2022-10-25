@@ -33,10 +33,8 @@ class FlaxCLIP:
     self.text_prompts_list = text_prompts_list
 
     # compute text embeddings
-    if self.tokenizer is None:
-      self.tokenizer = CLIPTokenizer.from_pretrained(self.model_name)
-    if self.model is None:
-      self.model = FlaxCLIPModel.from_pretrained(self.model_name)
+    if self.tokenizer is None: self.tokenizer = CLIPTokenizer.from_pretrained(self.model_name)
+    if self.model is None: self.model = FlaxCLIPModel.from_pretrained(self.model_name)
 
     text_features_list = []
     for text_prompts in self.text_prompts_list:
@@ -60,7 +58,7 @@ class FlaxCLIP:
   def set_general_quality_col_ids(self, general_quality_col_ids: List[int]):
     self.general_quality_col_ids = general_quality_col_ids
 
-  def preprocess_and_cache_image_npy(self, photos: List[Union[str, Path]], cache_file_prefix: str, batch_size=4096):
+  def _preprocess_and_cache_image_npy(self, photos: List[Union[str, Path]], cache_file_prefix: str, batch_size=4096):
     '''
     This is done as a temporary measure to improve GPU utilization by 
     preprocessing the images and caching npy to disk by a 4-CPU instance, and
@@ -68,8 +66,7 @@ class FlaxCLIP:
 
     TODO: find a better way to parallelize data preprocessing from CPU
     '''
-    if self.processor is None:
-      self.processor = CLIPProcessor.from_pretrained(self.model_name)
+    if self.processor is None: self.processor = CLIPProcessor.from_pretrained(self.model_name)
 
     photo_batches = [photos[i:i+batch_size] for i in range(0, len(photos), batch_size)]
 
@@ -84,7 +81,7 @@ class FlaxCLIP:
 
     save_to_pickle(img_names_list, f'{cache_file_prefix}_img_names_list.pkl')
 
-  def predict_from_npy(self, cache_file_prefix: str, batch_size=64) -> pd.DataFrame:
+  def _predict_from_npy(self, cache_file_prefix: str, batch_size=64) -> pd.DataFrame:
     assert self.text_features is not None, 'text_features not set'
 
     npz_files = [str(f) for f in Path('.').lf(f'{cache_file_prefix}*.npz')]                
@@ -141,8 +138,8 @@ class FlaxCLIP:
       image_features: np.ndarray of shape (len(photos), 512)
     '''
 
-    if self.processor is None:
-      self.processor = CLIPProcessor.from_pretrained(self.model_name)
+    if self.processor is None: self.processor = CLIPProcessor.from_pretrained(self.model_name)
+    if self.model is None: self.model = FlaxCLIPModel.from_pretrained(self.model_name)
 
     photo_batches = [photos[i:i+batch_size] for i in range(0, len(photos), batch_size)]
 
@@ -172,8 +169,7 @@ class FlaxCLIP:
     assert self.text_features is not None, 'text_features not set'
     if photos is not None:
 
-      if self.processor is None:
-        self.processor = CLIPProcessor.from_pretrained(self.model_name)
+      if self.processor is None: self.processor = CLIPProcessor.from_pretrained(self.model_name)
 
       photo_batches = [photos[i:i+batch_size] for i in range(0, len(photos), batch_size)]
 
