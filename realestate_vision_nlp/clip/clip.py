@@ -26,35 +26,82 @@ class FlaxCLIP:
 
   def set_text_prompts_list(self, text_prompts_list: List[str]):
     '''
-    text_prompts_list: list of pairs of text prompts to be used for CLIP model
+    text_prompts_list: text prompts with the following data structure:
+
+    text_prompts_list = [
+      {'item_name': 'p_granite_countertop','prompt_neutral': "a photo of a kitchen", 'prompt_positive': "a photo of a kitchen with beautiful granite counter top.", "prompt_type": "feature"},
+      {'item_name': 'p_abundance_of_cabinet_storage', 'prompt_neutral': "a photo of a kitchen", 'prompt_positive': "a photo of a kitchen with abundance of cabinet storage.", "prompt_type": "feature"},
+      {'item_name': 'p_impressive_custom_kitchen_cabinetry', 'prompt_neutral': "a photo of a kitchen", 'prompt_positive': "a photo of a kitchen with beautiful impressive custom kitchen cabinetry.", "prompt_type": "feature"},
+      {'item_name': 'p_hardwood_flooring', 'prompt_neutral': "a photo of a kitchen", 'prompt_positive': "a photo of a kitchen with hardwood flooring.", "prompt_type": "feature"},
+      
+      {'item_name': 'p_excellent_kitchen', 
+        'prompt_neutral': "a photo of a kitchen", 
+        'prompt_positive': ["a photo of a beautiful gourmet kitchen.", 
+                            "a photo of a dream kitchen."], 
+        "prompt_type": "ensemble_quality"},
+
+        {'item_name': 'p_room', 
+        'prompt_neutral': ["a photo of a living room.", 
+                            "a photo of a bathroom.", 
+                            "a photo of a kitchen.", 
+                            "a photo of a dining room.", 
+                            "a photo of a garage.", 
+                            "a photo of a laundry room."], 
+        'prompt_positive': None, 
+        "prompt_type": "multi_scene"},
+        
+        {'item_name': 'p_indoor', 'prompt_neutral': "An outdoor photo", 'prompt_positive': "An indoor photo", "prompt_type": "scene"}
+    ]
     
     Set self.text_prompts_list and compute self.text_features
     '''
+
     self.text_prompts_list = text_prompts_list
+    self.prompts_df = pd.DataFrame(self.text_prompts_list)
 
     # compute text embeddings
     try:
       if self.tokenizer is None: self.tokenizer = CLIPTokenizer.from_pretrained(self.model_name)
     except:
       self.tokenizer = CLIPTokenizer.from_pretrained(self.model_name)
-      
+
     if self.model is None: self.model = FlaxCLIPModel.from_pretrained(self.model_name)
 
-    text_features_list = []
-    for text_prompts in self.text_prompts_list:
-        text_embeddings = self.model.get_text_features(self.tokenizer(text_prompts, padding=True, return_tensors="np").input_ids)
-        text_features = text_embeddings / jnp.linalg.norm(text_embeddings, axis=-1, keepdims=True)
-        text_features_list.append(text_features)
-        
-    # stack the text_features
-    self.text_features = jnp.stack(text_features_list, axis=0)
+    def get_text_features(text_prompt_pair):
+      text_embeddings = self.model.get_text_features(self.tokenizer(text_prompt_pair, padding=True, return_tensors="np").input_ids)
+      text_features = text_embeddings / jnp.linalg.norm(text_embeddings, axis=-1, keepdims=True)    
+      return text_features
 
-    del text_features_list
-    del text_embeddings
+    binary_text_features_list = []
+    for k, row in self.prompts_df.iterrows():
+      if row.prompt_type == 'feature' or row.prompt_type == 'quality' or row.prompt_type == 'scene':
+        text_features = get_text_features([row.prompt_neutral, row.prompt_positive])
+
+      elif row.prompt_type == 'ensemble_quality':
+        text_features = jnp.mean(jnp.stack([get_text_features([row.prompt_neutral, p]) for p in row.prompt_positive], axis=0), axis=0)
+
+      else:
+        continue
+
+      binary_text_features_list.append(text_features)        
+
+    self.binary_text_features = jnp.stack(binary_text_features_list, axis=0)   # stack (num_prompts, 2, 512)
+
+    self.multi_text_features_list = []
+    for k, row in self.prompts_df.iterrows():
+      if row.prompt_type == 'multi_scene':
+        text_features = get_text_features(row.prompt_neutral)      
+      else:
+        continue
+
+      self.multi_text_features_list.append(text_features)
+    
+
+    del binary_text_features_list
     del self.tokenizer
     gc.collect()
 
-    assert self.text_features.shape == (len(self.text_prompts_list), 2, 512), 'wrong shape'
+    # assert self.text_features.shape == (len(self.text_prompts_list), 2, 512), 'wrong shape'
 
   def set_specific_feature_col_ids(self, specific_feature_col_ids: List[int]):
     self.specific_feature_col_ids = specific_feature_col_ids
@@ -170,7 +217,8 @@ class FlaxCLIP:
     photos: list of image paths
     data_src_name: name of the data source, which is written to the output df in a column named 'data_src'
     '''
-    assert self.text_features is not None, 'text_features not set'
+    assert self.text_prompts_list is not None, 'set_text_prompts_list not ran.'
+    
     if photos is not None:
 
       if self.processor is None: self.processor = CLIPProcessor.from_pretrained(self.model_name)
@@ -199,27 +247,46 @@ class FlaxCLIP:
       gc.collect()
 
       assert probs.shape[1:] == (len(self.text_prompts_list), 2)
+
     elif image_features is not None and image_names is not None:
       img_names_list = image_names
-      probs = jax.nn.softmax(100 * jnp.einsum('mc, ftc -> fmt', image_features, self.text_features), axis=-1)
-      probs = rearrange(probs, 'f b c -> b f c')
-      probs = np.array(probs)
+      binary_probs = jax.nn.softmax(100 * jnp.einsum('mc, ftc -> fmt', image_features, self.binary_text_features), axis=-1)
+      binary_probs = rearrange(binary_probs, 'f b c -> b f c')
+      binary_probs = np.array(binary_probs)
+
+      multi_probs_list = []
+      for multi_text_features in self.multi_text_features_list:
+        multi_probs = jax.nn.softmax(100 * jnp.einsum('mc, tc -> mt', image_features, multi_text_features), axis=-1)
+        multi_probs = np.array(multi_probs)
+
+        multi_probs_list.append(multi_probs)
+
     else:
       raise ValueError('Either photos or image_features and image_names must be provided')
 
     df = pd.DataFrame(data={'img_name': img_names_list})
-    for k, col in enumerate([self._prompt_to_colname(t[-1]) for t in self.text_prompts_list]):
-        df[col] = probs[:, k, 1]
+   
+    for k, (idx, row) in enumerate(self.prompts_df.q_py("prompt_type == 'feature' or prompt_type == 'quality' or prompt_type == 'scene' or prompt_type == 'ensemble_quality'").iterrows()):
+      df[row.item_name] = binary_probs[:, k, 1]
+
+    for k, (idx, row) in enumerate(self.prompts_df.q_py("prompt_type == 'multi_scene'").iterrows()):
+      for j, c in enumerate(row.prompt_neutral):
+        df[c] = multi_probs_list[k][:, j]
+
     df['data_src'] = data_src_name
 
     # features score is the mean prob of specific features (excl. general qualify or room type classification)
-    df['features_score'] = np.mean(df[[self._prompt_to_colname(t[-1]) for i, t in enumerate(self.text_prompts_list) if i in self.specific_feature_col_ids]].values, axis=-1)
+    # df['features_score'] = np.mean(df[[self._prompt_to_colname(t[-1]) for i, t in enumerate(self.text_prompts_list) if i in self.specific_feature_col_ids]].values, axis=-1)
 
+    feature_cols = list(self.prompts_df.q_py("prompt_type == 'feature'").item_name.values)
+    df['features_score'] = np.mean(df[feature_cols].values, axis=-1)
+    
     # filter out images that mostly likely not kitchen
     # if 'prob_kitchen' in df.columns:
     #   df.drop(index=df.q_py("prob_kitchen < 0.5").index, inplace=True)
     #   df.defrag_index(inplace=True)
     #   df.drop(columns=['prob_kitchen'], inplace=True)
+
 
     return df
     
@@ -228,7 +295,8 @@ class FlaxCLIP:
 
   def reset_text_prompts(self):
     self.text_prompts_list = None
-    self.text_features = None
+    self.binary_text_features = None
+    self.multi_text_features_list = None
     gc.collect()
 
 
@@ -242,12 +310,10 @@ class FlaxCLIP:
     #   os.remove(f'{cache_file_prefix}_img_names_list.pkl')
 
   def save_text_prompts_to_prob_cols(self, dest_dir: Path):
-    save_to_pickle({t[-1]: self._prompt_to_colname(t[-1]) for t in self.text_prompts_list}, dest_dir/'kitchen_text_prompts_to_prob_cols.pkl')
     save_to_pickle(self.text_prompts_list, dest_dir/'kitchen_text_prompts_list.pkl')
 
-
-  def _prompt_to_colname(self, prompt):
-    # x = 'prob_' + prompt.split('❚❚❚')[-1].replace('a photo of a kitchen with ', '').replace('a photo of a ', '').replace(' ', '_').replace('.', '')
+  @staticmethod
+  def prompt_to_colname(self, prompt):
     x = 'prob_' + prompt.replace('a photo of a kitchen with ', '').replace('a photo of a ', '').replace(' ', '_').replace('.', '')
     return x
 
