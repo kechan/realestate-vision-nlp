@@ -103,12 +103,6 @@ class FlaxCLIP:
 
     # assert self.text_features.shape == (len(self.text_prompts_list), 2, 512), 'wrong shape'
 
-  def set_specific_feature_col_ids(self, specific_feature_col_ids: List[int]):
-    self.specific_feature_col_ids = specific_feature_col_ids
-
-  def set_general_quality_col_ids(self, general_quality_col_ids: List[int]):
-    self.general_quality_col_ids = general_quality_col_ids
-
   def _preprocess_and_cache_image_npy(self, photos: List[Union[str, Path]], cache_file_prefix: str, batch_size=4096):
     '''
     This is done as a temporary measure to improve GPU utilization by 
