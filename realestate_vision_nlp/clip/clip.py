@@ -7,6 +7,7 @@ from einops import rearrange
 from pathlib import Path
 
 import numpy as np
+import tensorflow as tf
 import pandas as pd
 from transformers import CLIPProcessor, FlaxCLIPModel, CLIPTokenizer
 import jax
@@ -175,9 +176,11 @@ class FlaxCLIP:
 
     return df
 
-  def get_image_features(self, photos: List[Union[str, Path]], batch_size=64) -> Tuple[List, np.ndarray]:
+  def get_image_features(self, photos: List[Union[str, Path]] = None, ds: tf.data.Dataset = None, batch_size=64) -> Tuple[List, np.ndarray]:
     '''
     photos: list of image paths
+
+    ds: unbatched tf.data.Dataset of (image_byte, image_name) tuples, image size must be 224x224 un-rescaled i.e. [0, 255].
 
     return:
       img_names_list: list of image names
@@ -187,23 +190,43 @@ class FlaxCLIP:
     if self.processor is None: self.processor = CLIPProcessor.from_pretrained(self.model_name)
     if self.model is None: self.model = FlaxCLIPModel.from_pretrained(self.model_name)
 
-    photo_batches = [photos[i:i+batch_size] for i in range(0, len(photos), batch_size)]
+    if photos is not None:
+      photo_batches = [photos[i:i+batch_size] for i in range(0, len(photos), batch_size)]
 
-    img_names_list = []
-    image_features_list = []
-    for photo_batch in tqdm(photo_batches):
-      imgs = [PIL.Image.open(img_name) for img_name in photo_batch]
-      img_names_list += [Path(img_name).name for img_name in photo_batch]
+      img_names_list = []
+      image_features_list = []
+      for photo_batch in tqdm(photo_batches):
+        imgs = [PIL.Image.open(img_name) for img_name in photo_batch]
+        img_names_list += [Path(img_name).name for img_name in photo_batch]
 
-      pixel_values = self.processor(images=imgs, return_tensors="np").pixel_values
+        pixel_values = self.processor(images=imgs, return_tensors="np").pixel_values
 
-      image_embeddings = self.model.get_image_features(pixel_values)
-      image_features = image_embeddings / jnp.linalg.norm(image_embeddings, axis=-1, keepdims=True)
+        image_embeddings = self.model.get_image_features(pixel_values)
+        image_features = image_embeddings / jnp.linalg.norm(image_embeddings, axis=-1, keepdims=True)
 
-      image_features_list.append(np.array(image_features))
+        image_features_list.append(np.array(image_features))
 
-    image_features = np.concatenate(image_features_list, axis=0)
-    # np.savez_compressed(f'clip_image_features_{data_src_name}', files=img_names_list, image_features=image_features)
+      image_features = np.concatenate(image_features_list, axis=0)
+    elif ds is not None:
+      image_mean = np.array(self.processor.feature_extractor.image_mean).astype(np.float32)
+      image_std = np.array(self.processor.feature_extractor.image_std).astype(np.float32)
+
+      batch_img_ds = ds.batch(batch_size).prefetch(buffer_size=tf.data.AUTOTUNE)
+
+      img_names_list = []
+      image_features_list = []
+
+      for imgs, names in tqdm(batch_img_ds.as_numpy_iterator()):
+        img_names_list += [name.decode('utf-8') for name in names]
+
+        pixel_values = self.processor.feature_extractor.normalize(rearrange(imgs, 'b h w c -> b c h w'), mean=image_mean[:, None, None], std=image_std[:, None, None], rescale=True)
+        image_embeddings = self.model.get_image_features(pixel_values)
+        image_features = image_embeddings / jnp.linalg.norm(image_embeddings, axis=-1, keepdims=True)
+        image_features_list.append(np.array(image_features))
+
+      image_features = np.concatenate(image_features_list, axis=0)
+    else:
+      raise ValueError('photos and ds cannot be both None')
     
     return img_names_list, image_features
 
@@ -275,7 +298,6 @@ class FlaxCLIP:
     #   df.drop(index=df.q_py("prob_kitchen < 0.5").index, inplace=True)
     #   df.defrag_index(inplace=True)
     #   df.drop(columns=['prob_kitchen'], inplace=True)
-
 
     return df
     
