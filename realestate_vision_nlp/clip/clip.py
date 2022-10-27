@@ -180,7 +180,7 @@ class FlaxCLIP:
     '''
     photos: list of image paths
 
-    ds: unbatched tf.data.Dataset of (image_byte, image_name) tuples, image size must be 224x224 un-rescaled i.e. [0, 255].
+    ds: unbatched tf.data.Dataset of (image_byte, image_name) tuples, image size must be 224x224 and rescaled i.e. [0, 1].
 
     return:
       img_names_list: list of image names
@@ -219,7 +219,8 @@ class FlaxCLIP:
       for imgs, names in tqdm(batch_img_ds.as_numpy_iterator()):
         img_names_list += [name.decode('utf-8') for name in names]
 
-        pixel_values = self.processor.feature_extractor.normalize(rearrange(imgs, 'b h w c -> b c h w'), mean=image_mean[:, None, None], std=image_std[:, None, None], rescale=True)
+        # pixel_values = self.processor.feature_extractor.normalize(rearrange(imgs, 'b h w c -> b c h w'), mean=image_mean[:, None, None], std=image_std[:, None, None], rescale=True)
+        pixel_values = self.processor.feature_extractor.normalize(rearrange(imgs, 'b h w c -> b c h w'), mean=image_mean[:, None, None], std=image_std[:, None, None])
         image_embeddings = self.model.get_image_features(pixel_values)
         image_features = image_embeddings / jnp.linalg.norm(image_embeddings, axis=-1, keepdims=True)
         image_features_list.append(np.array(image_features))
