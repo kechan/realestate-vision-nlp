@@ -67,17 +67,18 @@ class FlaxCLIP:
 
     if self.model is None: self.model = FlaxCLIPModel.from_pretrained(self.model_name)
 
-    def get_text_features(text_prompt_pair):
-      text_embeddings = self.model.get_text_features(self.tokenizer(text_prompt_pair, padding=True, return_tensors="np").input_ids)
+    def get_text_features(text_prompts):
+      # return normalized vector representation of text prompts
+      text_embeddings = self.model.get_text_features(self.tokenizer(text_prompts, padding=True, return_tensors="np").input_ids)
       text_features = text_embeddings / jnp.linalg.norm(text_embeddings, axis=-1, keepdims=True)    
       return text_features
 
     binary_text_features_list = []
     for k, row in self.prompts_df.iterrows():
-      if row.prompt_type == 'feature' or row.prompt_type == 'quality' or row.prompt_type == 'scene':
+      if row.prompt_type == '1:1':   # neutral vs positive pair
         text_features = get_text_features([row.prompt_neutral, row.prompt_positive])
 
-      elif row.prompt_type == 'ensemble_quality':
+      elif row.prompt_type == '1:M':   # neutral vs. an ensemble of positive prompts
         text_features = jnp.mean(jnp.stack([get_text_features([row.prompt_neutral, p]) for p in row.prompt_positive], axis=0), axis=0)
 
       else:
@@ -89,7 +90,7 @@ class FlaxCLIP:
 
     self.multi_text_features_list = []
     for k, row in self.prompts_df.iterrows():
-      if row.prompt_type == 'multi_scene':
+      if row.prompt_type == 'M':     # M classes, prediction is argmax over M classes.
         text_features = get_text_features(row.prompt_neutral)      
       else:
         continue
@@ -260,20 +261,14 @@ class FlaxCLIP:
 
     df = pd.DataFrame(data={'img_name': img_names_list})
    
-    for k, (idx, row) in enumerate(self.prompts_df.q_py("prompt_type == 'feature' or prompt_type == 'quality' or prompt_type == 'scene' or prompt_type == 'ensemble_quality'").iterrows()):
+    for k, (idx, row) in enumerate(self.prompts_df.q_py("prompt_type == '1:1' or prompt_type == '1:M'").iterrows()):
       df[row.item_name] = binary_probs[:, k, 1]
 
-    for k, (idx, row) in enumerate(self.prompts_df.q_py("prompt_type == 'multi_scene'").iterrows()):
+    for k, (idx, row) in enumerate(self.prompts_df.q_py("prompt_type == 'M'").iterrows()):
       for j, c in enumerate(row.prompt_neutral):
         df[c] = multi_probs_list[k][:, j]
 
     df['data_src'] = data_src_name
-
-    # features score is the mean prob of specific features (excl. general qualify or room type classification)
-    # df['features_score'] = np.mean(df[[self._prompt_to_colname(t[-1]) for i, t in enumerate(self.text_prompts_list) if i in self.specific_feature_col_ids]].values, axis=-1)
-
-    feature_cols = list(self.prompts_df.q_py("prompt_type == 'feature'").item_name.values)
-    df['features_score'] = np.mean(df[feature_cols].values, axis=-1)
     
     # filter out images that mostly likely not kitchen
     # if 'prob_kitchen' in df.columns:
@@ -284,6 +279,32 @@ class FlaxCLIP:
 
     return df
     
+
+  def compute_feature_score(self, df):
+    # This method should be overriden by the subclass, depending on app context
+    # features score is the mean prob of specific features (excl. general quality or room type classification)
+
+    # feature_cols = list(self.prompts_df.q_py("class_type == 'feature'").item_name.values)
+    # df['features_score'] = np.mean(df[feature_cols].values, axis=-1)
+
+    # very similar group of features should be locally averaged, before averaging over all features 
+    
+    # 1) counter tops
+    counter_top_scores = np.mean(df[['p_granite_countertop', 'p_marble_countertop', 'p_quartz_countertop']].values, axis=-1, keepdims=True)
+
+    # 2) cabinet
+    cabinet_score = np.mean(df[['p_full_height_cabinets', 'p_abundance_of_cabinet_storage', 'p_impressive_custom_kitchen_cabinetry']].values, axis=-1, keepdims=True)
+
+    # 3) lighting
+    lighting_score = np.mean(df[['p_recessed_lighting', 'p_large_light_fixture_with_unique_finishes']].values, axis=-1, keepdims=True)
+
+    # 4) island
+    island_score = df[['p_kitchen_island']].values
+
+    # 5) stainless steel
+    # ss_score = df[['p_stainless_steel']].values
+
+    df['features_score'] = np.mean(np.concatenate([counter_top_scores, lighting_score, island_score], axis=-1), axis=-1)
 
     
 
