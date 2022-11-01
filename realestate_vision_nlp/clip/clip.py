@@ -180,12 +180,13 @@ class FlaxCLIP:
     '''
     photos: list of image paths
 
-    ds: unbatched tf.data.Dataset of (image_byte, image_name) tuples, image size must be 224x224 and rescaled i.e. [0, 1].
+    ds: unbatched tf.data.Dataset of (image_byte, image_name) tuples, image size must be 224x224 and rescaled to [0, 1].
 
     return:
       img_names_list: list of image names
       image_features: np.ndarray of shape (len(photos), 512)
     '''
+
 
     if self.processor is None: self.processor = CLIPProcessor.from_pretrained(self.model_name)
     if self.model is None: self.model = FlaxCLIPModel.from_pretrained(self.model_name)
@@ -208,6 +209,12 @@ class FlaxCLIP:
 
       image_features = np.concatenate(image_features_list, axis=0)
     elif ds is not None:
+      # sanity dataset
+      for img, name in ds.take(1).as_numpy_iterator():
+        assert img.shape == (224, 224, 3)
+        assert img.max() <= 1.0
+        assert img.min() >= 0.0
+
       image_mean = np.array(self.processor.feature_extractor.image_mean).astype(np.float32)
       image_std = np.array(self.processor.feature_extractor.image_std).astype(np.float32)
 
@@ -303,31 +310,38 @@ class FlaxCLIP:
     return df
     
 
-  def compute_feature_score(self, df):
+  def compute_feature_score(self, df: pd.DataFrame, scene_type: str):
+    # A new column 'features_score' will be added to df
+
     # This method should be overriden by the subclass, depending on app context
     # features score is the mean prob of specific features (excl. general quality or room type classification)
 
-    # feature_cols = list(self.prompts_df.q_py("class_type == 'feature'").item_name.values)
-    # df['features_score'] = np.mean(df[feature_cols].values, axis=-1)
-
-    # very similar group of features should be locally averaged, before averaging over all features 
+    if scene_type == 'kitchen':
+      # very similar group of features should be locally averaged, before averaging over all features 
     
-    # 1) counter tops
-    counter_top_scores = np.mean(df[['p_granite_countertop', 'p_marble_countertop', 'p_quartz_countertop']].values, axis=-1, keepdims=True)
+      # 1) counter tops
+      counter_top_scores = np.mean(df[['p_granite_countertop', 'p_marble_countertop', 'p_quartz_countertop']].values, axis=-1, keepdims=True)
 
-    # 2) cabinet
-    cabinet_score = np.mean(df[['p_full_height_cabinets', 'p_abundance_of_cabinet_storage', 'p_impressive_custom_kitchen_cabinetry']].values, axis=-1, keepdims=True)
+      # 2) cabinet
+      cabinet_score = np.mean(df[['p_full_height_cabinets', 'p_abundance_of_cabinet_storage', 'p_impressive_custom_kitchen_cabinetry']].values, axis=-1, keepdims=True)
 
-    # 3) lighting
-    lighting_score = np.mean(df[['p_recessed_lighting', 'p_large_light_fixture_with_unique_finishes']].values, axis=-1, keepdims=True)
+      # 3) lighting
+      lighting_score = np.mean(df[['p_recessed_lighting', 'p_large_light_fixture_with_unique_finishes']].values, axis=-1, keepdims=True)
 
-    # 4) island
-    island_score = df[['p_kitchen_island']].values
+      # 4) island
+      island_score = df[['p_kitchen_island']].values
 
-    # 5) stainless steel
-    # ss_score = df[['p_stainless_steel']].values
+      # 5) stainless steel
+      # ss_score = df[['p_stainless_steel']].values
 
-    df['features_score'] = np.mean(np.concatenate([counter_top_scores, lighting_score, island_score], axis=-1), axis=-1)
+      df['features_score'] = np.mean(np.concatenate([counter_top_scores, lighting_score, island_score], axis=-1), axis=-1)
+
+    elif scene_type == 'bathroom':
+      feature_cols = list(self.prompts_df.q_py("class_type == 'feature'").item_name.values)
+      df['features_score'] = np.mean(df[feature_cols].values, axis=-1)
+
+    else:
+      raise ValueError(f'Unknown scene_type: {scene_type}')
 
     
 
@@ -347,8 +361,8 @@ class FlaxCLIP:
     # if Path(f'{cache_file_prefix}_img_names_list.pkl').exists():
     #   os.remove(f'{cache_file_prefix}_img_names_list.pkl')
 
-  def save_text_prompts_to_prob_cols(self, dest_dir: Path):
-    save_to_pickle(self.text_prompts_list, dest_dir/'kitchen_text_prompts_list.pkl')
+  def save_text_prompts_to_prob_cols(self, dest_dir: Path, scene_type: str):
+    save_to_pickle(self.text_prompts_list, dest_dir/f'{scene_type}_text_prompts_list.pkl')
 
   @staticmethod
   def prompt_to_colname(self, prompt):
