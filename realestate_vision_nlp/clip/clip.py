@@ -202,8 +202,8 @@ class FlaxCLIP:
 
         pixel_values = self.processor(images=imgs, return_tensors="np").pixel_values
 
-        image_embeddings = self.model.get_image_features(pixel_values)
-        image_features = image_embeddings / jnp.linalg.norm(image_embeddings, axis=-1, keepdims=True)
+        image_features = self.model.get_image_features(pixel_values)
+        # image_features = image_embeddings / jnp.linalg.norm(image_embeddings, axis=-1, keepdims=True)
 
         image_features_list.append(np.array(image_features))
 
@@ -228,8 +228,8 @@ class FlaxCLIP:
 
         # pixel_values = self.processor.feature_extractor.normalize(rearrange(imgs, 'b h w c -> b c h w'), mean=image_mean[:, None, None], std=image_std[:, None, None], rescale=True)
         pixel_values = self.processor.feature_extractor.normalize(rearrange(imgs, 'b h w c -> b c h w'), mean=image_mean[:, None, None], std=image_std[:, None, None])
-        image_embeddings = self.model.get_image_features(pixel_values)
-        image_features = image_embeddings / jnp.linalg.norm(image_embeddings, axis=-1, keepdims=True)
+        image_features = self.model.get_image_features(pixel_values)
+        # image_features = image_embeddings / jnp.linalg.norm(image_embeddings, axis=-1, keepdims=True)
         image_features_list.append(np.array(image_features))
 
       image_features = np.concatenate(image_features_list, axis=0)
@@ -242,6 +242,8 @@ class FlaxCLIP:
     '''
     photos: list of image paths
     data_src_name: name of the data source, which is written to the output df in a column named 'data_src'
+
+    image_features: un-normalized image clip representation 
     '''
     assert self.text_prompts_list is not None, 'set_text_prompts_list not ran.'
     
@@ -276,6 +278,8 @@ class FlaxCLIP:
 
     elif image_features is not None and image_names is not None:
       img_names_list = image_names
+      image_features = image_features / jnp.linalg.norm(image_features, axis=-1, keepdims=True)
+
       binary_probs = jax.nn.softmax(100 * jnp.einsum('mc, ftc -> fmt', image_features, self.binary_text_features), axis=-1)
       binary_probs = rearrange(binary_probs, 'f b c -> b f c')
       binary_probs = np.array(binary_probs)

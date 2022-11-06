@@ -188,6 +188,9 @@ def get_all_listing_df(keep_cols=['jumpId', 'remarks'], dedup=False) -> pd.DataF
   df.drop_duplicates(subset='jumpId', keep='last', inplace=True)
   df.defrag_index(inplace=True)
 
+  if keep_cols is None:
+    return df
+    
   df = df[keep_cols]
   return df
 
