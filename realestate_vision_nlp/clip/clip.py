@@ -1,7 +1,8 @@
 from typing import List, Set, Dict, Tuple, Any, Optional, Iterator, Union
 from xml.dom import NoDataAllowedErr
 
-import PIL, re, os, gc
+import tarfile, PIL, re, os, gc
+from io import BytesIO
 from tqdm import tqdm
 from einops import rearrange
 from pathlib import Path
@@ -176,12 +177,18 @@ class FlaxCLIP:
 
     return df
 
-  def get_image_features(self, photos: List[Union[str, Path, Tuple[str, PIL.Image.Image]]] = None, ds: tf.data.Dataset = None, batch_size=64) -> Tuple[List, np.ndarray]:
+  def get_image_features(self, 
+                         photos: List[Union[str, Path, Tuple[str, PIL.Image.Image]]] = None, 
+                         ds: tf.data.Dataset = None, 
+                         tarfile_path: Union[str, Path] = None,
+                         batch_size=64) -> Tuple[List, np.ndarray]:
     '''
     photos: list of images. If str or Path, the full path to the image. 
             If (name, PIL.Image.Image) tuple, then (name of image, image object).
 
     ds: unbatched tf.data.Dataset of (image_byte, image_name) tuples, image size must be 224x224 and rescaled to [0, 1].
+
+    tarfile_path: path to a tarfile containing images.
 
     return:
       img_names_list: list of image names
@@ -240,6 +247,27 @@ class FlaxCLIP:
         image_features = self.model.get_image_features(pixel_values)
         # image_features = image_embeddings / jnp.linalg.norm(image_embeddings, axis=-1, keepdims=True)
         image_features_list.append(np.array(image_features))
+
+      image_features = np.concatenate(image_features_list, axis=0)
+    elif tarfile_path is not None:
+      img_names_list = []
+      image_features_list = []
+
+      with tarfile.open(tarfile_path, 'r') as tar:
+        members = tar.getmembers()
+        
+        # batch the members
+        member_batches = [members[i:i+batch_size] for i in range(0, len(members), batch_size)]
+
+        for member_batch in tqdm(member_batches):          
+          
+          imgs = [PIL.Image.open(BytesIO(tar.extractfile(member).read())) for member in member_batch]
+          img_names_list += [m.name for m in member_batch]
+
+          pixel_values = self.processor(images=imgs, return_tensors="np").pixel_values
+
+          image_features = self.model.get_image_features(pixel_values)          
+          image_features_list.append(np.array(image_features))
 
       image_features = np.concatenate(image_features_list, axis=0)
     else:
