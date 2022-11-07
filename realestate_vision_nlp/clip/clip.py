@@ -176,9 +176,10 @@ class FlaxCLIP:
 
     return df
 
-  def get_image_features(self, photos: List[Union[str, Path]] = None, ds: tf.data.Dataset = None, batch_size=64) -> Tuple[List, np.ndarray]:
+  def get_image_features(self, photos: List[Union[str, Path, Tuple[str, PIL.Image.Image]]] = None, ds: tf.data.Dataset = None, batch_size=64) -> Tuple[List, np.ndarray]:
     '''
-    photos: list of image paths
+    photos: list of images. If str or Path, the full path to the image. 
+            If (name, PIL.Image.Image) tuple, then (name of image, image object).
 
     ds: unbatched tf.data.Dataset of (image_byte, image_name) tuples, image size must be 224x224 and rescaled to [0, 1].
 
@@ -187,18 +188,26 @@ class FlaxCLIP:
       image_features: np.ndarray of shape (len(photos), 512)
     '''
 
-
     if self.processor is None: self.processor = CLIPProcessor.from_pretrained(self.model_name)
     if self.model is None: self.model = FlaxCLIPModel.from_pretrained(self.model_name)
 
     if photos is not None:
       photo_batches = [photos[i:i+batch_size] for i in range(0, len(photos), batch_size)]
 
+      # check if photos is List[Tuple[str, PIL.Image.Image]]
+      is_photo_a_tuple = False
+      if isinstance(photos[0], tuple) and isinstance(photos[0][0], str) and isinstance(photos[0][1], PIL.Image.Image):
+        is_photo_a_tuple = True
+
       img_names_list = []
       image_features_list = []
       for photo_batch in tqdm(photo_batches):
-        imgs = [PIL.Image.open(img_name) for img_name in photo_batch]
-        img_names_list += [Path(img_name).name for img_name in photo_batch]
+        if not is_photo_a_tuple:
+          imgs = [PIL.Image.open(img_name) for img_name in photo_batch]
+          img_names_list += [Path(img_name).name for img_name in photo_batch]
+        else:
+          imgs = [img for _, img in photo_batch]
+          img_names_list += [name for name, _ in photo_batch]
 
         pixel_values = self.processor(images=imgs, return_tensors="np").pixel_values
 
