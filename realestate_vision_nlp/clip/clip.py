@@ -381,6 +381,10 @@ class FlaxCLIP:
       feature_cols = list(self.prompts_df.q_py("class_type == 'feature'").item_name.values)
       df['features_score'] = np.mean(df[feature_cols].values, axis=-1)
 
+    elif scene_type == 'exterior':
+      feature_cols = list(self.prompts_df.q_py("class_type == 'feature'").item_name.values)
+      df['features_score'] = np.mean(df[feature_cols].values, axis=-1)
+
     else:
       raise ValueError(f'Unknown scene_type: {scene_type}')
 
