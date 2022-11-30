@@ -19,12 +19,14 @@ from realestate_core.common.utils import load_from_pickle, save_to_pickle
 ### class abstraction for CLIP/HuggingFace model
 
 class FlaxCLIP:
-  def __init__(self, model_name: str = 'openai/clip-vit-base-patch32'):
+  def __init__(self, model_name: str = 'openai/clip-vit-base-patch32', from_pt=None):
     self.model_name = model_name
 
     self.model = None # lazy evaluation
     self.processor = None # lazy evaluation
     self.tokenizer = None # lazy evaluation
+
+    self.from_pt = from_pt    # if only pytorch weight available
 
   def set_text_prompts_list(self, text_prompts_list: List[str]):
     '''
@@ -67,7 +69,11 @@ class FlaxCLIP:
     except:
       self.tokenizer = CLIPTokenizer.from_pretrained(self.model_name)
 
-    if self.model is None: self.model = FlaxCLIPModel.from_pretrained(self.model_name)
+    if self.model is None: 
+      if self.from_pt is not None:
+        self.model = FlaxCLIPModel.from_pretrained(self.model_name, from_pt=self.from_pt)
+      else:
+        self.model = FlaxCLIPModel.from_pretrained(self.model_name)
 
     def get_text_features(text_prompts):
       # return normalized vector representation of text prompts
@@ -196,7 +202,11 @@ class FlaxCLIP:
     '''
 
     if self.processor is None: self.processor = CLIPProcessor.from_pretrained(self.model_name)
-    if self.model is None: self.model = FlaxCLIPModel.from_pretrained(self.model_name)
+    if self.model is None: 
+      if self.from_pt is not None:
+        self.model = FlaxCLIPModel.from_pretrained(self.model_name, from_pt=self.from_pt)
+      else:
+        self.model = FlaxCLIPModel.from_pretrained(self.model_name)
 
     if photos is not None:
       photo_batches = [photos[i:i+batch_size] for i in range(0, len(photos), batch_size)]
@@ -275,7 +285,12 @@ class FlaxCLIP:
     
     return img_names_list, image_features
 
-  def predict(self, photos: List[Union[str, Path]] = None, image_features: np.ndarray = None, image_names: Union[List, np.ndarray] = None, data_src_name: str = None, batch_size=64) -> pd.DataFrame:
+  def predict(self, 
+              photos: List[Union[str, Path]] = None, 
+              image_features: np.ndarray = None, 
+              image_names: Union[List, np.ndarray] = None, 
+              data_src_name: str = None, 
+              batch_size=64) -> pd.DataFrame:
     '''
     photos: list of image paths
     data_src_name: name of the data source, which is written to the output df in a column named 'data_src'
@@ -386,9 +401,7 @@ class FlaxCLIP:
       df['features_score'] = np.mean(df[feature_cols].values, axis=-1)
 
     else:
-      raise ValueError(f'Unknown scene_type: {scene_type}')
-
-    
+      raise ValueError(f'Unknown scene_type: {scene_type}')    
 
   def reset_text_prompts(self):
     self.text_prompts_list = None
@@ -406,8 +419,9 @@ class FlaxCLIP:
     # if Path(f'{cache_file_prefix}_img_names_list.pkl').exists():
     #   os.remove(f'{cache_file_prefix}_img_names_list.pkl')
 
-  def save_text_prompts_to_prob_cols(self, dest_dir: Path, scene_type: str):
+  def save_text_prompts(self, dest_dir: Path, scene_type: str):
     save_to_pickle(self.text_prompts_list, dest_dir/f'{scene_type}_text_prompts_list.pkl')
+
 
   @staticmethod
   def prompt_to_colname(self, prompt):
