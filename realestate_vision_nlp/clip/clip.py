@@ -67,7 +67,10 @@ class FlaxCLIP:
     try:
       if self.tokenizer is None: self.tokenizer = CLIPTokenizer.from_pretrained(self.model_name)
     except:
-      self.tokenizer = CLIPTokenizer.from_pretrained(self.model_name)
+      try:
+        self.tokenizer = CLIPTokenizer.from_pretrained(self.model_name)
+      except:
+        self.tokenizer = CLIPProcessor.from_pretrained(self.model_name).tokenizer
 
     if self.model is None: 
       if self.from_pt is not None:
